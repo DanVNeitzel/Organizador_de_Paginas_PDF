@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Organizador de Páginas PDF – HTML/CSS/JS</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>if (window['pdfjsLib']) { pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; }</script>
+  <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+  <style>
+    body {
+      background: #0b1220;
+      color: #e5e7eb;
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      padding: 0;
+    }
+
+    header {
+      padding: 1rem;
+      background: #111827;
+      border-bottom: 1px solid #1f2937;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 1.25rem;
+    }
+
+    .container-fluid {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      min-height: calc(100vh - 72px);
+    }
+
+    aside {
+      border-right: 1px solid #1f2937;
+      background: #111827;
+      padding: 1rem;
+    }
+
+    main {
+      padding: 1rem;
+    }
+
+    .thumbs {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 12px;
+    }
+
+    .thumb {
+      background: #0b1220;
+      border: 1px solid #22314a;
+      border-radius: 14px;
+      overflow: hidden;
+      position: relative;
+      cursor: grab;
+    }
+
+    .thumb.dragging {
+      opacity: .6;
+      transform: scale(.98);
+    }
+
+    .thumb canvas {
+      width: 100%;
+      height: auto;
+      display: block;
+      background: #fff;
+    }
+
+    .thumb .meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 10px;
+      color: #94a3b8;
+      font-size: 12px;
+    }
+
+    .badge {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      background: rgba(0, 0, 0, .65);
+      color: #fff;
+      padding: 4px 6px;
+      border-radius: 10px;
+      font-size: 11px;
+    }
+
+    button {
+      width: 100%;
+      margin-bottom: .5rem;
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>Organizador de Páginas PDF</h1>
+    <button id="btnExport" class="btn btn-success" disabled>Exportar PDF</button>
+  </header>
+  <div class="container-fluid">
+    <aside>
+      <input id="fileBase" type="file" class="form-control mb-2" accept="application/pdf">
+      <input id="fileExtra" type="file" class="form-control mb-2" accept="application/pdf">
+      <button id="btnAddBlank" class="btn btn-secondary" disabled>Adicionar Página em Branco</button>
+      <button id="btnDuplicateSel" class="btn btn-primary" disabled>Duplicar Seleção</button>
+      <button id="btnDeleteSel" class="btn btn-danger" disabled>Remover Seleção</button>
+      <button id="btnClear" class="btn btn-warning" disabled>Limpar Tudo</button>
+      <button id="btnSelectAll" class="btn btn-outline-secondary" disabled>Selecionar Tudo</button>
+      <button id="btnUnselectAll" class="btn btn-outline-secondary" disabled>Limpar Seleção</button>
+    </aside>
+    <main>
+      <div class="thumbs" id="thumbs"></div>
+    </main>
+  </div>
+  <script>
+    let basePdfBytes = null;
+    let basePdfDoc = null;
+    let allSources = [];
+    let extraDocs = [];
+    const dom = {
+      fileBase: document.getElementById('fileBase'),
+      fileExtra: document.getElementById('fileExtra'),
+      btnAddBlank: document.getElementById('btnAddBlank'),
+      btnDuplicateSel: document.getElementById('btnDuplicateSel'),
+      btnDeleteSel: document.getElementById('btnDeleteSel'),
+      btnClear: document.getElementById('btnClear'),
+      btnExport: document.getElementById('btnExport'),
+      btnSelectAll: document.getElementById('btnSelectAll'),
+      btnUnselectAll: document.getElementById('btnUnselectAll'),
+      thumbs: document.getElementById('thumbs')
+    };
+    function enableWorkspace(on) {
+      ['btnAddBlank', 'btnDuplicateSel', 'btnDeleteSel', 'btnClear', 'btnExport', 'btnSelectAll', 'btnUnselectAll'].forEach(id => dom[id].disabled = !on);
+    }
+    function readAsArrayBuffer(file) { return new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsArrayBuffer(file); }); }
+    async function renderThumb(doc, pageIndex) {
+      const page = await doc.getPage(pageIndex + 1);
+      const viewport = page.getViewport({ scale: 0.2 });
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = Math.max(160, Math.floor(viewport.width));
+      canvas.height = Math.floor(viewport.height * (canvas.width / viewport.width));
+      await page.render({ canvasContext: ctx, viewport: page.getViewport({ scale: (canvas.width / viewport.width) * 0.2 }) }).promise;
+      return { canvas, width: page.view[2], height: page.view[3] };
+    }
+    function addThumbCard({ canvas, label, sourceIndex }) {
+      const wrap = document.createElement('div');
+      wrap.className = 'thumb';
+      wrap.dataset.sourceIndex = sourceIndex;
+      wrap.innerHTML = `<div class='badge'>${label}</div>`;
+      wrap.appendChild(canvas);
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      const chk = document.createElement('input'); chk.type = 'checkbox'; chk.className = 'sel';
+      meta.appendChild(document.createTextNode('Pág.')); meta.appendChild(chk);
+      wrap.appendChild(meta);
+      dom.thumbs.appendChild(wrap);
+    }
+    function renumberBadges() { [...dom.thumbs.children].forEach((el, i) => { el.querySelector('.badge').textContent = i + 1; }); }
+    async function buildGrid() {
+      dom.thumbs.innerHTML = '';
+      for (let i = 0; i < allSources.length; i++) {
+        const src = allSources[i];
+        let canvas;
+        if (src.type === 'blank') {
+          canvas = document.createElement('canvas'); canvas.width = 200; canvas.height = 282; const ctx = canvas.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.fillStyle = '#ccc'; ctx.font = '12px sans-serif'; ctx.fillText('Página em branco', 10, 20);
+        } else if (src.type === 'base') {
+          const res = await renderThumb(basePdfDoc, src.index); canvas = res.canvas;
+        } else if (src.type === 'extra') {
+          const doc = extraDocs[src.extraDocIdx].doc;
+          const res = await renderThumb(doc, src.index); canvas = res.canvas;
+        }
+        addThumbCard({ canvas, label: i + 1, sourceIndex: i });
+      }
+      initSortable(); renumberBadges();
+    }
+    function initSortable() {
+      if (dom._sortable) dom._sortable.destroy();
+      dom._sortable = Sortable.create(dom.thumbs, {
+        animation: 150, ghostClass: 'ghost', dragClass: 'dragging', onEnd: () => {
+          // Após drag & drop, reconstruir allSources com base na ordem visual
+          // Reconstruir allSources usando a ordem visual dos elementos
+          const newOrder = [...dom.thumbs.children].map((el) => {
+            // Usar o índice original salvo em data-sourceIndex
+            return allSources[parseInt(el.dataset.sourceIndex, 10)];
+          });
+          allSources = newOrder;
+          // Atualizar data-sourceIndex para refletir nova ordem
+          [...dom.thumbs.children].forEach((el, i) => el.dataset.sourceIndex = i);
+          renumberBadges();
+        }
+      });
+    }
+    dom.fileBase.addEventListener('change', async e => {
+      const f = e.target.files[0]; if (!f) return;
+      const bytes = await readAsArrayBuffer(f);
+      basePdfBytes = bytes;
+      basePdfDoc = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
+      allSources = []; for (let i = 0; i < basePdfDoc.numPages; i++) allSources.push({ type: 'base', index: i });
+      extraDocs = []; enableWorkspace(true); buildGrid();
+    });
+    dom.fileExtra.addEventListener('change', async e => {
+      const f = e.target.files[0]; if (!f || !basePdfDoc) return;
+      const bytes = await readAsArrayBuffer(f);
+      const doc = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
+      const idx = extraDocs.push({ doc, bytes }) - 1;
+      for (let i = 0; i < doc.numPages; i++) allSources.push({ type: 'extra', extraDocIdx: idx, index: i });
+      buildGrid();
+    });
+    dom.btnAddBlank.addEventListener('click', () => { allSources.push({ type: 'blank' }); buildGrid(); });
+    dom.btnDuplicateSel.addEventListener('click', () => {
+      const nodes = [...dom.thumbs.children].map((n, i) => ({ n, i, chk: n.querySelector('input.sel').checked })).filter(x => x.chk);
+      if (nodes.length === 0) return alert('Selecione ao menos uma página.');
+      const slices = nodes.map(s => allSources[s.i]);
+      allSources.push(...slices); buildGrid();
+    });
+    dom.btnDeleteSel.addEventListener('click', () => {
+      const nodes = [...dom.thumbs.children];
+      allSources = nodes.filter(n => !n.querySelector('input.sel').checked).map((el, i) => allSources[i]);
+      buildGrid();
+    });
+    dom.btnClear.addEventListener('click', () => {
+      allSources = [];
+      buildGrid();
+    });
+    dom.btnSelectAll.addEventListener('click', () => {
+      [...dom.thumbs.children].forEach(el => el.querySelector('input.sel').checked = true);
+    });
+    dom.btnUnselectAll.addEventListener('click', () => {
+      [...dom.thumbs.children].forEach(el => el.querySelector('input.sel').checked = false);
+    });
+    dom.btnExport.addEventListener('click', async () => {
+      if (!basePdfBytes) return;
+      const newPdfDoc = await PDFLib.PDFDocument.create();
+      const basePdfLib = await PDFLib.PDFDocument.load(basePdfBytes.slice(0));
+      // Prepare extra PDFLib docs (map by index)
+      const extraPdfLibDocs = await Promise.all(
+        extraDocs.map(docObj =>
+          docObj && docObj.bytes ? PDFLib.PDFDocument.load(docObj.bytes.slice(0)) : null
+        )
+      );
+      for (const src of allSources) {
+        if (src.type === 'base') {
+          const [page] = await newPdfDoc.copyPages(basePdfLib, [src.index]);
+          newPdfDoc.addPage(page);
+        } else if (src.type === 'extra') {
+          const doc = extraPdfLibDocs[src.extraDocIdx];
+          if (doc) {
+            const [page] = await newPdfDoc.copyPages(doc, [src.index]);
+            newPdfDoc.addPage(page);
+          }
+        } else if (src.type === 'blank') {
+          newPdfDoc.addPage([600, 842]); // A4 size
+        }
+      }
+      const pdfBytes = await newPdfDoc.save();
+      const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'pdf_modificado.pdf';
+      link.click();
+    });
+  </script>
+</body>
+
+</html>
